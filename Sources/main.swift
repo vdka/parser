@@ -14,10 +14,27 @@ extension ExpressibleByStringLiteral where StringLiteralType == String {
 enum Token: CustomStringConvertible, ExpressibleByStringLiteral {
     case colon
     case comma
+    case lparen
+    case rparen
     case ident(String)
 
     init(stringLiteral: String) {
-        self = .ident(stringLiteral)
+        switch stringLiteral {
+        case ":":
+            self = .colon
+
+        case ",":
+            self = .comma
+
+        case "(":
+            self = .lparen
+
+        case ")":
+            self = .rparen
+
+        default:
+            self = .ident(stringLiteral)
+        }
     }
 
     var description: String {
@@ -27,6 +44,12 @@ enum Token: CustomStringConvertible, ExpressibleByStringLiteral {
 
         case .comma:
             return ","
+
+        case .lparen:
+            return "("
+
+        case .rparen:
+            return ")"
 
         case .ident(let s):
             return s
@@ -93,6 +116,19 @@ indirect enum AstNode: CustomStringConvertible {
     }
 }
 
+struct State: OptionSet, ExpressibleByIntegerLiteral {
+    let rawValue: UInt64
+    init(rawValue: UInt64) {
+        self.rawValue = rawValue
+    }
+    init(integerLiteral value: UInt64) {
+        self.rawValue = value
+    }
+
+    static let `default`:     State = 0b0000
+    static let disallowComma: State = 0b0001
+}
+
 func append(_ l: AstNode, _ r: AstNode) -> AstNode {
     switch (l, r) {
     case (.list(let ls), .list(let rs)):
@@ -117,13 +153,15 @@ func explode(_ n: AstNode) -> [AstNode] {
 }
 
 var tokenStack: [Token] = []
+var state: State = .default
 
 func peek() -> Token? {
     return tokenStack.first
 }
 
-func next() {
-    tokenStack.removeFirst()
+@discardableResult
+func next() -> Token {
+    return tokenStack.removeFirst()
 }
 
 func lbp(_ token: Token) -> Int {
@@ -131,11 +169,20 @@ func lbp(_ token: Token) -> Int {
     case .ident:
         return 0
 
+    case .lparen:
+        return 20
+
     case .colon:
-        return 1
+        return 30
+
+    case .comma where state.contains(.disallowComma):
+        return 0
 
     case .comma:
-        return 2
+        return 40
+
+    default:
+        return 0
     }
 }
 
@@ -144,6 +191,33 @@ func nud(_ token: Token) -> AstNode {
     case .ident:
         next()
         return AstNode.ident(token)
+
+    case .lparen:
+        next()
+        let oldState = state
+        defer { state = oldState }
+        state = .default // reset the state
+        var exp = expr()
+        while case .comma? = peek() {
+            next()
+            let right = expr()
+            exp = append(exp, right)
+        }
+        let tok = next()
+        switch tok {
+        case .rparen:
+            break
+
+        default:
+            print("Error: expected rparen, got: '\(tok)'")
+            return .invalid(tok)
+        }
+
+        return exp
+
+    case .comma:
+        next()
+        return expr()
 
     default:
         next()
@@ -162,6 +236,9 @@ func led(_ token: Token, _ left: AstNode) -> AstNode {
     case .colon:
         next()
         let bp = lbp(token)
+//        var prevState = state
+//        defer { state = prevState }
+        state.insert(.disallowComma)
 
         switch peek() {
         case .colon?:
@@ -200,7 +277,8 @@ func parse() -> [AstNode] {
     return nodes
 }
 
-tokenStack = ["x", .comma, "y", .comma, "z", .colon, "f32", .comma, "w", .colon, "f64"]
+tokenStack = ["(", "x", ",", "y", ",", "z", ":", "f32", ",", "w", ":", "f64", ")"]
+//tokenStack = ["x", .comma, "y", .comma, "z", .colon, "f32", .comma, "w", .colon, "f64"]
 
 let nodes = parse()
 for node in nodes {
